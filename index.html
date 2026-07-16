@@ -41,6 +41,19 @@ body{display:flex;flex-direction:column;background:var(--bg)}
 .lock-err{color:#EF9A9A;font-size:11px;min-height:16px;font-family:'IBM Plex Mono',monospace}
 .lock-foot{font-size:10px;color:rgba(255,255,255,.25);margin-top:24px;font-family:'IBM Plex Mono',monospace}
 
+/* ══ ONE-TIME SETUP WALL ══ */
+.setup-wall{position:fixed;inset:0;background:#fff;z-index:970;display:none;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:24px}
+.setup-wall.show{display:flex}
+.stp-icon{font-size:40px;margin-bottom:14px}
+.stp-title{font-size:19px;font-weight:700;color:var(--green-d);margin-bottom:8px;font-family:'IBM Plex Mono',monospace}
+.stp-msg{font-size:13px;color:var(--muted);max-width:420px;line-height:1.7;margin-bottom:18px}
+.stp-code{font-family:'IBM Plex Mono',monospace;font-size:15px;font-weight:600;background:var(--green-bg);border:1.5px dashed var(--border-d);color:var(--green-d);padding:12px 18px;border-radius:var(--r);max-width:420px;word-break:break-all;margin-bottom:14px}
+.stp-steps{font-size:12px;color:var(--muted);text-align:left;max-width:420px;line-height:1.9;margin-bottom:18px;background:#F2F9F0;padding:14px 18px;border-radius:var(--r);border:1px solid var(--border)}
+.stp-steps b{color:var(--text)}
+.stp-btn{background:var(--green);color:#fff;border:none;padding:10px 22px;border-radius:var(--r);font-size:12px;font-weight:600;cursor:pointer;font-family:'IBM Plex Sans',sans-serif}
+.stp-btn:hover{background:var(--green-d)}
+.stp-err{color:var(--red);font-size:12px;margin-top:14px;max-width:380px}
+
 /* ══ SUSPEND WALL ══ */
 .sus-wall{position:fixed;inset:0;background:linear-gradient(145deg,#7B241C,#C0392B);z-index:950;display:none;flex-direction:column;align-items:center;justify-content:center;text-align:center;color:#fff;padding:20px}
 .sus-wall.show{display:flex}
@@ -294,6 +307,22 @@ body{display:flex;flex-direction:column;background:var(--bg)}
 </head>
 <body>
 
+<!-- ══ ONE-TIME SETUP WALL (only appears until the shared workspace ID is saved into the code) ══ -->
+<div class="setup-wall" id="setup-wall">
+  <div class="stp-icon">🔧</div>
+  <div class="stp-title">One-time setup — connect this workspace</div>
+  <div class="stp-msg">This copy of the app isn't pointed at a shared workspace yet. A fresh one was just created for you below.</div>
+  <div class="stp-code" id="stp-code">—</div>
+  <div class="stp-steps">
+    <b>1.</b> Copy the code above.<br>
+    <b>2.</b> Open <b>inventory.html</b> and <b>database.html</b> in a text/code editor.<br>
+    <b>3.</b> Near the top of the script, replace <code>WORKSPACE_ID = "..."</code> with your copied code — in <u>both</u> files.<br>
+    <b>4.</b> Save and re-upload/redeploy both files, then reload this page.
+  </div>
+  <button class="stp-btn" onclick="location.reload()">I've updated both files — Reload</button>
+  <div class="stp-err" id="stp-err"></div>
+</div>
+
 <!-- ══ LOCK SCREEN ══ -->
 <div class="lock" id="lock">
   <div class="lock-logo"><div class="lock-sq"><span></span><span></span><span></span><span></span></div>STUDIO DB</div>
@@ -328,6 +357,7 @@ body{display:flex;flex-direction:column;background:var(--bg)}
   </div>
   <div class="tb-nav">
     <button class="tnav" onclick="toggleFeed()">📡 Live Feed</button>
+    <a class="tnav" href="inventory.html">📦 Inventory</a>
     <span class="tnav active">⬢ Database</span>
     <button class="tnav logout" onclick="doLogout()">↩ Logout</button>
   </div>
@@ -469,55 +499,86 @@ body{display:flex;flex-direction:column;background:var(--bg)}
 
 <script>
 // ══════════════════════════════════════════════════════════════════
-// STORAGE — shared, live, and persistent
-// Uses this artifact's built-in shared storage: every person who opens
-// this page (this device, a teammate's device, tomorrow, next week) reads
-// and writes the exact same data. No accounts, no keys, no setup — it
-// just feels like ordinary local storage, but it's actually shared.
-// Keys are shared with inventory.html so both pages see one live dataset.
+// STORAGE — a real shared workspace, live across every device
+// Backed by kvdb.io, a free key-value store — no accounts, no login,
+// no paid plan needed. Everyone who opens this page with the SAME
+// WORKSPACE_ID below reads and writes the exact same data, whether
+// that's your phone, a teammate's laptop, or you tomorrow.
+// This ID is shared with inventory.html — both files must match.
 // ══════════════════════════════════════════════════════════════════
+let WORKSPACE_ID = "PASTE-YOUR-WORKSPACE-ID-HERE"; // ← replace once, see setup screen
+
 const SYNC_KEYS = ['users','items','checkouts','log','sections_def'];
 const CACHE = {};
 const saveTimers = {};
+let pollIdx = 0;
 
 const S = {
   get: k => CACHE[k],
   set: (k,v) => {
     CACHE[k] = v;
     clearTimeout(saveTimers[k]);
-    saveTimers[k] = setTimeout(() => persistKey(k), 120);
+    saveTimers[k] = setTimeout(() => persistKey(k), 250);
   },
   ts: () => new Date().toISOString(),
   fmt: iso => { if(!iso) return '—'; const d = new Date(iso); return d.toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'}) + ' ' + d.toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'}); }
 };
 
+function kvUrl(key) { return `https://kvdb.io/${WORKSPACE_ID}/${encodeURIComponent(key)}`; }
+
 async function persistKey(k) {
-  try { await window.storage.set('studio:'+k, JSON.stringify(CACHE[k] ?? null), true); }
-  catch(e) { /* will retry on the next change; nothing to show the user */ }
+  try {
+    await fetch(kvUrl(k), { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(CACHE[k] ?? null) });
+  } catch(e) { /* will retry on the next change */ }
 }
 async function fetchKey(k) {
-  try { const r = await window.storage.get('studio:'+k, true); return r ? JSON.parse(r.value) : null; }
-  catch(e) { return null; }
+  try {
+    const r = await fetch(kvUrl(k));
+    if (r.status === 404) return null;
+    if (!r.ok) return null;
+    const t = await r.text();
+    return t ? JSON.parse(t) : null;
+  } catch(e) { return null; }
 }
 
-// Loads the live shared data once, then polls quietly in the background so
-// every visitor's screen stays current with what everyone else is doing.
+// Creates a brand-new shared workspace the first time this app is opened
+// with no WORKSPACE_ID configured yet, and shows the code to save.
+async function ensureWorkspace() {
+  if (WORKSPACE_ID && WORKSPACE_ID !== 'PASTE-YOUR-WORKSPACE-ID-HERE') return true;
+  try {
+    const r = await fetch('https://kvdb.io/', { method:'POST', headers:{'Content-Type':'application/x-www-form-urlencoded'}, body:'email=studio-inventory@example.com&default_ttl=0' });
+    const id = (await r.text()).trim();
+    document.getElementById('stp-code').textContent = id || '(could not generate — reload to retry)';
+    if (!id) document.getElementById('stp-err').textContent = 'Something went wrong creating the workspace. Check your connection and reload.';
+  } catch(e) {
+    document.getElementById('stp-code').textContent = '(offline — check your connection)';
+    document.getElementById('stp-err').textContent = 'Could not reach the storage service. Check your connection and reload.';
+  }
+  document.getElementById('setup-wall').classList.add('show');
+  return false;
+}
+
+// Loads the live shared data once, then quietly checks one key at a time
+// in rotation (kind to the free rate limit) so every visitor's screen
+// stays current with what everyone else is doing.
 function initSync(onReady) {
   (async () => {
-    for (const k of SYNC_KEYS) {
+    const ok = await ensureWorkspace();
+    if (!ok) return;
+    await Promise.all(SYNC_KEYS.map(async k => {
       const v = await fetchKey(k);
       if (v !== null) CACHE[k] = v;
-    }
+    }));
     onReady();
     setInterval(async () => {
-      for (const k of SYNC_KEYS) {
-        const v = await fetchKey(k);
-        if (v !== null && JSON.stringify(v) !== JSON.stringify(CACHE[k])) {
-          CACHE[k] = v;
-          window.dispatchEvent(new CustomEvent('data-sync', {detail:k}));
-        }
+      const k = SYNC_KEYS[pollIdx % SYNC_KEYS.length];
+      pollIdx++;
+      const v = await fetchKey(k);
+      if (v !== null && JSON.stringify(v) !== JSON.stringify(CACHE[k])) {
+        CACHE[k] = v;
+        window.dispatchEvent(new CustomEvent('data-sync', {detail:k}));
       }
-    }, 3500);
+    }, 4000);
   })();
 }
 
@@ -563,7 +624,7 @@ let suspendTargetId = null;
 function addLog(entry) {
   const log = S.get('log') || [];
   log.unshift({ ...entry, id: Date.now() + Math.random(), ts: S.ts() });
-  S.set('log', log.slice(0, 600));
+  S.set('log', log.slice(0, 60));
 }
 
 function isSus(u) {
