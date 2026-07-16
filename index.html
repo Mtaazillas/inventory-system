@@ -477,12 +477,12 @@ body{display:flex;flex-direction:column;background:var(--bg)}
 // Falls back to this-browser-only storage if not configured.
 // ══════════════════════════════════════════════════════════════════
 const FIREBASE_CONFIG = {
-  apiKey: "YOUR_API_KEY",
-  authDomain: "YOUR_PROJECT.firebaseapp.com",
-  databaseURL: "https://YOUR_PROJECT-default-rtdb.firebaseio.com",
-  projectId: "YOUR_PROJECT",
+  apiKey: "AIzaSyDZYDdehqV5J5FS1GaYRui4dDo7V__o_LI",
+  authDomain: "inventory-7fad0.firebaseapp.com",
+  databaseURL: "https://inventory-7fad0-default-rtdb.firebaseio.com",
+  projectId: "inventory-7fad0",
 };
-const FIREBASE_ENABLED = FIREBASE_CONFIG.apiKey !== "YOUR_API_KEY" && !!FIREBASE_CONFIG.databaseURL;
+const FIREBASE_ENABLED = FIREBASE_CONFIG.apiKey !== "AIzaSyDZYDdehqV5J5FS1GaYRui4dDo7V__o_LI" && !!FIREBASE_CONFIG.databaseURL;
 const SYNC_KEYS = ['users','items','checkouts','log','sections_def'];
 let fdb = null;
 if (FIREBASE_ENABLED) {
