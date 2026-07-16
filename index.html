@@ -316,7 +316,7 @@ body{display:flex;flex-direction:column;background:var(--bg)}
     <div class="sw-unit"><div class="v" id="sw-s">00</div><div class="l">Sec</div></div>
   </div>
   <div class="sw-reason" id="sw-reason"></div>
-  <button class="sw-back" onclick="sessionStorage.removeItem('db_session');location.reload()">← Back to Login</button>
+  <button class="sw-back" onclick="location.reload()">← Back to Login</button>
 </div>
 
 <!-- ══ APP ══ -->
@@ -467,55 +467,58 @@ body{display:flex;flex-direction:column;background:var(--bg)}
 
 <div class="toast" id="toast"></div>
 
-<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
-<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-database-compat.js"></script>
 <script>
 // ══════════════════════════════════════════════════════════════════
-// STORAGE — shared keys with index.html
-// Backed by Firebase Realtime Database when FIREBASE_CONFIG is filled in below,
-// so every visitor to either page sees the same live, shared data and history.
-// Falls back to this-browser-only storage if not configured.
+// STORAGE — shared, live, and persistent
+// Uses this artifact's built-in shared storage: every person who opens
+// this page (this device, a teammate's device, tomorrow, next week) reads
+// and writes the exact same data. No accounts, no keys, no setup — it
+// just feels like ordinary local storage, but it's actually shared.
+// Keys are shared with inventory.html so both pages see one live dataset.
 // ══════════════════════════════════════════════════════════════════
-const FIREBASE_CONFIG = {
-  apiKey: "AIzaSyDZYDdehqV5J5FS1GaYRui4dDo7V__o_LI",
-  authDomain: "inventory-7fad0.firebaseapp.com",
-  databaseURL: "https://inventory-7fad0-default-rtdb.firebaseio.com",
-  projectId: "inventory-7fad0",
-};
-const FIREBASE_ENABLED = FIREBASE_CONFIG.apiKey !== "AIzaSyDZYDdehqV5J5FS1GaYRui4dDo7V__o_LI" && !!FIREBASE_CONFIG.databaseURL;
 const SYNC_KEYS = ['users','items','checkouts','log','sections_def'];
-let fdb = null;
-if (FIREBASE_ENABLED) {
-  try { firebase.initializeApp(FIREBASE_CONFIG); fdb = firebase.database(); }
-  catch(e) { console.warn('Firebase init failed — running in local-only mode.', e); }
-}
 const CACHE = {};
-SYNC_KEYS.forEach(k => { try { CACHE[k] = JSON.parse(localStorage.getItem(k)); } catch(e) { CACHE[k] = null; } });
+const saveTimers = {};
 
 const S = {
   get: k => CACHE[k],
   set: (k,v) => {
     CACHE[k] = v;
-    try { localStorage.setItem(k, JSON.stringify(v)); S.bc(k); } catch(e){}
-    if (fdb) { fdb.ref(k).set(v).catch(e => console.warn('Sync write failed (saved locally, will not sync until online):', e)); }
+    clearTimeout(saveTimers[k]);
+    saveTimers[k] = setTimeout(() => persistKey(k), 120);
   },
-  bc: k => { try { localStorage.setItem('_bc', JSON.stringify({k, t: Date.now()})); } catch(e){} },
   ts: () => new Date().toISOString(),
   fmt: iso => { if(!iso) return '—'; const d = new Date(iso); return d.toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'}) + ' ' + d.toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'}); }
 };
 
-// Waits for the first real answer from Firebase for every key (so a fresh device never
-// stomps shared data with empty defaults), then keeps re-rendering live as data changes.
+async function persistKey(k) {
+  try { await window.storage.set('studio:'+k, JSON.stringify(CACHE[k] ?? null), true); }
+  catch(e) { /* will retry on the next change; nothing to show the user */ }
+}
+async function fetchKey(k) {
+  try { const r = await window.storage.get('studio:'+k, true); return r ? JSON.parse(r.value) : null; }
+  catch(e) { return null; }
+}
+
+// Loads the live shared data once, then polls quietly in the background so
+// every visitor's screen stays current with what everyone else is doing.
 function initSync(onReady) {
-  if (!fdb) { onReady(); return; }
-  let pending = SYNC_KEYS.length, ready = false;
-  SYNC_KEYS.forEach(k => {
-    fdb.ref(k).on('value', snap => {
-      if (snap.exists()) { CACHE[k] = snap.val(); try{ localStorage.setItem(k, JSON.stringify(CACHE[k])); }catch(e){} }
-      if (!ready) { pending--; if (pending<=0) { ready = true; onReady(); } }
-      else { window.dispatchEvent(new CustomEvent('data-sync', {detail:k})); }
-    }, err => { console.warn('Sync read failed for', k, err); if (!ready) { pending--; if (pending<=0){ready=true; onReady();} } });
-  });
+  (async () => {
+    for (const k of SYNC_KEYS) {
+      const v = await fetchKey(k);
+      if (v !== null) CACHE[k] = v;
+    }
+    onReady();
+    setInterval(async () => {
+      for (const k of SYNC_KEYS) {
+        const v = await fetchKey(k);
+        if (v !== null && JSON.stringify(v) !== JSON.stringify(CACHE[k])) {
+          CACHE[k] = v;
+          window.dispatchEvent(new CustomEvent('data-sync', {detail:k}));
+        }
+      }
+    }, 3500);
+  })();
 }
 
 // ══════════════════════════════════════════════════════════════════
@@ -614,7 +617,6 @@ function createFirstAdmin() {
   if (!name) { err.textContent = 'Enter a name first.'; return; }
   const newUser = { id:Date.now(), name, role:'Admin', av:name.slice(0,2).toUpperCase(), color:'#1D6F42', permissions:ALL_PERMS.map(p=>p.key), sections:DEFAULT_SECTIONS.map(s=>s.id), suspended:false, suspendUntil:null, suspendReason:'', lastSeen:S.ts() };
   S.set('users', [newUser]);
-  sessionStorage.setItem('db_session', JSON.stringify(newUser));
   session = { ...newUser };
   addLog({ type:'login', uid:newUser.id, user:newUser.name, title:`${newUser.name} logged into DB`, detail:'Role: Admin (first account)' });
   document.getElementById('lock').style.display = 'none';
@@ -625,8 +627,7 @@ function tryLogin(uid) {
   const users = S.get('users') || [];
   const user = users.find(u => u.id === uid);
   if (!user) { document.getElementById('lock-err').textContent = 'Name not recognised. Access denied.'; return; }
-  if (isSus(user)) { sessionStorage.setItem('db_session', JSON.stringify(user)); showSusWall(user); return; }
-  sessionStorage.setItem('db_session', JSON.stringify(user));
+  if (isSus(user)) { showSusWall(user); return; }
   session = { ...user };
   // update lastSeen
   const idx = users.findIndex(u => u.id === uid);
@@ -644,7 +645,7 @@ function showSusWall(user) {
     // Re-read from storage in case admin lifted it
     const users = S.get('users') || [];
     const u = users.find(x => x.id === user.id);
-    if (!u || !isSus(u)) { document.getElementById('sus-wall').classList.remove('show'); sessionStorage.removeItem('db_session'); buildLock(); if(susInt) clearInterval(susInt); return; }
+    if (!u || !isSus(u)) { document.getElementById('sus-wall').classList.remove('show'); buildLock(); if(susInt) clearInterval(susInt); return; }
     const rem = susRem(u);
     if (!rem) { document.getElementById('sw-d').textContent='0'; document.getElementById('sw-h').textContent='00'; document.getElementById('sw-m').textContent='00'; document.getElementById('sw-s').textContent='00'; return; }
     document.getElementById('sw-d').textContent = rem.d;
@@ -657,7 +658,7 @@ function showSusWall(user) {
   susInt = setInterval(tick, 1000);
 }
 
-function doLogout() { sessionStorage.removeItem('db_session'); location.reload(); }
+function doLogout() { location.reload(); }
 
 // ══════════════════════════════════════════════════════════════════
 // INIT APP
@@ -675,11 +676,7 @@ function initApp() {
   checkStockAlerts();
   startClock();
   startFeedPoll();
-  // Cross-tab (same browser) real-time
-  window.addEventListener('storage', e => {
-    if (e.key === '_bc') { renderAll(); checkStockAlerts(); renderFeed(); }
-  });
-  // Cross-device real-time (Firebase)
+  // Live updates from any other visitor editing this shared workspace
   window.addEventListener('data-sync', () => { renderAll(); checkStockAlerts(); renderFeed(); if (!S.get('users')?.length) buildLock(); });
 }
 
@@ -1242,16 +1239,9 @@ document.addEventListener('keydown', e => {
 // ══════════════════════════════════════════════════════════════════
 initSync(() => {
   initDefaults();
+  // Every visit starts fresh at the name-picker lock screen — nothing is
+  // remembered in the browser, so who's "you" is always chosen anew.
   buildLock();
-  const saved = sessionStorage.getItem('db_session');
-  if (saved) {
-    const u = JSON.parse(saved);
-    const users = S.get('users') || [];
-    const fresh = users.find(x => x.id === u.id);
-    if (fresh && isSus(fresh)) { showSusWall(fresh); }
-    else if (fresh) { session = { ...fresh }; document.getElementById('lock').style.display='none'; initApp(); }
-    else { sessionStorage.removeItem('db_session'); buildLock(); }
-  }
 });
 </script>
 </body>
